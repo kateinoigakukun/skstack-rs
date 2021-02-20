@@ -30,7 +30,7 @@ impl fmt::Display for Error {
             Error::TTY(error) => <tty::Error as fmt::Display>::fmt(error, fmt),
             Error::Decode(string) => write!(fmt, "{}", string),
             Error::ParseInt(error) => <std::num::ParseIntError as fmt::Display>::fmt(error, fmt),
-            Error::UnexpectedEvent(error) => SKEvent::fmt(error, fmt),
+            Error::UnexpectedEvent(error) => write!(fmt, "unexpected event: {:?}", error),
             Error::ExpectOK(string) => write!(fmt, "{}", string),
         }
     }
@@ -80,7 +80,20 @@ pub struct SKPan {
 pub enum SKEvent {
     EVER(String),
     EPANDESC(SKPan),
-    EVENT { code: u8, sender: String },
+    EVENT {
+        code: u8,
+        sender: String,
+    },
+    ERXUDP {
+        sender: String,
+        dest: String,
+        rport: u16,
+        lport: u16,
+        sender_lla: String,
+        secured: u8,
+        datalen: u16,
+        data: Vec<u8>,
+    },
     Unknown(String),
 }
 
@@ -129,7 +142,7 @@ impl SKSTACK {
         loop {
             let event = self.read_event()?;
             match event {
-                SKEvent::EVENT { code: 20, .. } => {
+                SKEvent::EVENT { code: 0x20, .. } => {
                     match self.read_event()? {
                         SKEvent::EPANDESC(pan) => {
                             found.push(pan);
@@ -137,7 +150,7 @@ impl SKSTACK {
                         other => return Err(Error::UnexpectedEvent(other)),
                     };
                 }
-                SKEvent::EVENT { code: 22, .. } => {
+                SKEvent::EVENT { code: 0x22, .. } => {
                     break;
                 }
                 other => return Err(Error::UnexpectedEvent(other)),
@@ -167,15 +180,18 @@ impl SKSTACK {
         loop {
             let event = self.read_event()?;
             match event {
-                SKEvent::EVENT { code: 25, .. } => {
+                SKEvent::EVENT { code: 0x25, .. } => {
                     break;
                 }
-                SKEvent::EVENT { code: 24, .. } => {
-                    return Err(Error::UnexpectedEvent(event))
-                }
+                SKEvent::EVENT { code: 0x24, .. } => return Err(Error::UnexpectedEvent(event)),
                 _ => continue,
             }
         }
+        Ok(())
+    }
+
+    pub fn receive(&mut self) -> Result<()> {
+        self.read_line_str()?;
         Ok(())
     }
 
@@ -204,7 +220,7 @@ impl SKSTACK {
         }
     }
 
-    fn read_event(&mut self) -> Result<SKEvent> {
+    pub fn read_event(&mut self) -> Result<SKEvent> {
         let str = self.read_line_str()?;
         if let Some(version) = str.strip_prefix("EVER ") {
             return Ok(SKEvent::EVER(version.to_string()));
@@ -240,9 +256,74 @@ impl SKSTACK {
             }));
         } else if let Some(rest) = str.strip_prefix("EVENT ") {
             let mut components = rest.split_whitespace();
-            let code: u8 = components.next().unwrap().parse()?;
-            let sender: String = components.next().unwrap().to_string();
+            let code = u8::from_str_radix(
+                components.next().ok_or(Error::Decode(
+                    format!("failed to get code: {:}", rest).to_string(),
+                ))?,
+                16,
+            )?;
+            let sender: String = components
+                .next()
+                .ok_or(Error::Decode(
+                    format!("failed to get sender: {:}", rest).to_string(),
+                ))?
+                .to_string();
             return Ok(SKEvent::EVENT { code, sender });
+        } else if let Some(rest) = str.strip_prefix("ERXUDP ") {
+            let mut components = rest.split_whitespace();
+            let sender = components
+                .next()
+                .ok_or(Error::Decode(
+                    format!("failed to get sender: {:}", rest).to_string(),
+                ))?
+                .to_string();
+            let dest = components
+                .next()
+                .ok_or(Error::Decode(
+                    format!("failed to get dest: {:}", rest).to_string(),
+                ))?
+                .to_string();
+            let rport = u16::from_str_radix(
+                components.next().ok_or(Error::Decode(
+                    format!("failed to get rport: {:}", rest).to_string(),
+                ))?,
+                16,
+            )?;
+            let lport = u16::from_str_radix(
+                components.next().ok_or(Error::Decode(
+                    format!("failed to get lport: {:}", rest).to_string(),
+                ))?,
+                16,
+            )?;
+            let sender_lla = components
+                .next()
+                .ok_or(Error::Decode(
+                    format!("failed to get sender_lla: {:}", rest).to_string(),
+                ))?
+                .to_string();
+            let secured = u8::from_str_radix(
+                components.next().ok_or(Error::Decode(
+                    format!("failed to get secured: {:}", rest).to_string(),
+                ))?,
+                16,
+            )?;
+            let datalen = u16::from_str_radix(
+                components.next().ok_or(Error::Decode(
+                    format!("failed to get datalen: {:}", rest).to_string(),
+                ))?,
+                16,
+            )?;
+            let data = decode_hex(components.collect::<Vec<&str>>().join(" "))?;
+            return Ok(SKEvent::ERXUDP {
+                sender,
+                dest,
+                rport,
+                lport,
+                sender_lla,
+                secured,
+                datalen,
+                data: data,
+            });
         }
         return Ok(SKEvent::Unknown(str));
     }
@@ -281,7 +362,7 @@ fn read_until_crlf<R: BufRead + ?Sized>(
                 Err(e) => return Err(e),
             };
             match memchr::memchr(b'\r', available) {
-                Some(i) if available[i + 1] == b'\n' => {
+                Some(i) if i + 1 < available.len() && available[i + 1] == b'\n' => {
                     buf.extend_from_slice(&available[..=i + 1]);
                     (true, i + 2)
                 }
@@ -297,6 +378,13 @@ fn read_until_crlf<R: BufRead + ?Sized>(
             return Ok(read);
         }
     }
+}
+
+fn decode_hex(s: String) -> std::result::Result<Vec<u8>, std::num::ParseIntError> {
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16))
+        .collect()
 }
 
 #[cfg(test)]

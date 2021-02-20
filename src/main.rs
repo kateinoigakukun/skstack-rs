@@ -1,7 +1,8 @@
 use anyhow::Result;
-use skstack_rs::{SKPan, SKSTACK};
+use skstack_rs::{SKPan, SKSTACK, SKEvent};
 use log::debug;
 mod config;
+mod echonet_lite;
 
 fn main() -> Result<()> {
     env_logger::init();
@@ -30,5 +31,19 @@ fn main() -> Result<()> {
     skstack.set_register("S3", format!("{:X}", found.pan_id))?;
     let ip_v6_addr = skstack.get_link_local_addr(found.addr.clone())?;
     skstack.join(ip_v6_addr)?;
+
+    println!("start loop");
+    loop {
+        let event = skstack.read_event()?;
+        match event {
+            SKEvent::ERXUDP { data, .. } => {
+                let frame = echonet_lite::EFrame::from_bytes(&data)?;
+                println!("{:?}", frame);
+            }
+            other => {
+                println!("other event: {:?}", other);
+            }
+        }
+    }
     Ok(())
 }
