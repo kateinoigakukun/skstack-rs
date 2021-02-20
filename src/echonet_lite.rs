@@ -65,16 +65,31 @@ pub enum ESV {
     Get = 0x62,
     INF_REQ = 0x63,
     SetGet = 0x6E,
+
+    // Receive
+    Set_Res = 0x71,
+    Get_Res = 0x72,
+    INF = 0x73,
+    INFC = 0x74,
+    INFC_Res = 0x7A,
+    SetGet_Res = 0x7E,
+
+    // Error
+    SetI_SNA = 0x50,
+    SetC_SNA = 0x51,
+    Get_SNA = 0x52,
+    INF_SNA = 0x53,
+    SetGet_SNA = 0x5E,
 }
 
 #[derive(Debug)]
 pub struct EProp {
     /// echonet property code
-    epc: u8,
+    pub epc: u8,
     /// property data counter
-    pdc: u8,
+    pub pdc: u8,
     /// echonet data
-    edt: Vec<u8>,
+    pub edt: Vec<u8>,
 }
 
 impl EProp {
@@ -82,13 +97,6 @@ impl EProp {
         let mut bytes = vec![self.epc, self.pdc];
         bytes.extend(self.edt.iter());
         bytes
-    }
-    fn from_bytes(bytes: &[u8]) -> Self {
-        Self {
-            epc: bytes[0],
-            pdc: bytes[1],
-            edt: bytes[2..].to_vec(),
-        }
     }
 }
 
@@ -126,7 +134,7 @@ impl EFrame {
                 let opc = bytes[11];
                 let mut props = vec![];
                 let mut tail_cursor = 12;
-                for i in 0..opc {
+                for _ in 0..opc {
                     let epc = bytes[tail_cursor];
                     tail_cursor += 1;
                     let pdc = bytes[tail_cursor];
@@ -187,5 +195,19 @@ impl EFrame {
             }
         }
         bytes
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::{EFrame, Result};
+
+    #[test]
+    fn test_read_line_zero() -> Result<()> {
+        let bytes = [
+            0x10, 0x81, 0x12, 0x34, 0x02, 0x88, 0x01, 0x05, 0xFF, 0x01, 0x72, 0x01, 0xE7, 0x04,
+            0x00, 0x00, 0x01, 0xC0,
+        ];
+        EFrame::from_bytes(&bytes)?;
+        Ok(())
     }
 }

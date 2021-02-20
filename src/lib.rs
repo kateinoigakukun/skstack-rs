@@ -190,6 +190,27 @@ impl SKSTACK {
         Ok(())
     }
 
+    pub fn send_udp(
+        &mut self,
+        handle: u8,
+        port: u16,
+        ip_v6_addr: String,
+        bytes: &[u8],
+    ) -> Result<()> {
+        // TODO: Support SEC field
+        self.write_str(format!(
+            "SKSENDTO {:X} {} {:04X} 1 {:04X} {}\r\n",
+            handle,
+            ip_v6_addr,
+            port,
+            bytes.len(),
+            unsafe { std::str::from_utf8_unchecked(bytes) },
+        ))?;
+        self.read_line_str()?;
+        
+        Ok(())
+    }
+
     pub fn receive(&mut self) -> Result<()> {
         self.read_line_str()?;
         Ok(())
