@@ -1,0 +1,13 @@
+[package]
+name = "skstack-rs"
+version = "0.1.0"
+authors = ["Yuta Saito <kateinoigakukun@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+serialport = "4.0.0"
+anyhow = "1.0.38"
+memchr = { version = "2", default-features = false }
+nix = "0.19.1"
