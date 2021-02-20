@@ -1,5 +1,6 @@
 use core::fmt;
 use fmt::Debug;
+use log::info;
 use memchr;
 
 use std::{
@@ -18,7 +19,7 @@ pub enum Error {
     TTY(tty::Error),
     Decode(String),
     UnexpectedEvent(SKEvent),
-    ExpectOK(String)
+    ExpectOK(String),
 }
 impl fmt::Display for Error {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> std::result::Result<(), fmt::Error> {
@@ -62,25 +63,11 @@ pub enum SKEvent {
     EVER(String),
 }
 
-impl SKEvent {
-    fn from(str: String) -> Result<SKEvent> {
-        if let Some(version) = str.strip_prefix("EVER ") {
-            return Ok(SKEvent::EVER(version.to_string()));
-        }
-        return Err(Error::Decode(format!("failed decoding SKEvent: {}", str)));
-    }
-}
-
 impl SKSTACK {
     pub fn open(path: String) -> Result<Self> {
         let port = TTYPort::open(path, 115_200, std::time::Duration::from_millis(1000))?;
         let reader = std::io::BufReader::new(port);
         Ok(SKSTACK { reader })
-    }
-
-    pub fn write(&mut self, buf: &[u8]) -> Result<usize> {
-        let len = self.reader.get_mut().write(buf)?;
-        Ok(len)
     }
 
     pub fn version(&mut self) -> Result<String> {
@@ -94,6 +81,38 @@ impl SKSTACK {
         Ok(version)
     }
 
+    pub fn set_password<S: Into<String>>(&mut self, password: S) -> Result<()> {
+        let password: String = password.into();
+        self.write_str(format!("SKSETPWD {} {}\r\n", password.len(), password))?;
+        self.read_line_str()?;
+        self.consume_ok()?;
+        Ok(())
+    }
+
+    pub fn set_rbid<S: Into<String>>(&mut self, id: S) -> Result<()> {
+        let id: String = id.into();
+        self.write_str(format!("SKSETRBID {}\r\n", id))?;
+        self.read_line_str()?;
+        self.consume_ok()?;
+        Ok(())
+    }
+
+    fn write_str(&mut self, str: String) -> Result<usize> {
+        print!("{}", str);
+        self.write(str.as_bytes())
+    }
+    fn write(&mut self, buf: &[u8]) -> Result<usize> {
+        info!("write: {}", {
+            if let Ok(str) = std::str::from_utf8(buf) {
+                str.to_string()
+            } else {
+                format!("{:?}", buf)
+            }
+        });
+        let len = self.reader.get_mut().write(buf)?;
+        Ok(len)
+    }
+
     fn consume_ok(&mut self) -> Result<()> {
         let ok = self.read_line_str()?;
         if ok == "OK" {
@@ -105,7 +124,10 @@ impl SKSTACK {
 
     fn read_event(&mut self) -> Result<SKEvent> {
         let str = self.read_line_str()?;
-        SKEvent::from(str)
+        if let Some(version) = str.strip_prefix("EVER ") {
+            return Ok(SKEvent::EVER(version.to_string()));
+        }
+        return Err(Error::Decode(format!("failed decoding SKEvent: {}", str)));
     }
 
     fn read_line_str(&mut self) -> Result<String> {
@@ -116,7 +138,15 @@ impl SKSTACK {
     fn read_line(&mut self) -> Result<Vec<u8>> {
         let mut buf = vec![];
         read_until_crlf(&mut self.reader, &mut buf)?;
-        Ok(buf[..buf.len() - 2].into())
+        let result: Vec<u8> = buf[..buf.len() - 2].into();
+        info!("read: {}", {
+            if let Ok(str) = std::str::from_utf8(&result) {
+                str.to_string()
+            } else {
+                format!("{:?}", buf)
+            }
+        });
+        Ok(result)
     }
 }
 

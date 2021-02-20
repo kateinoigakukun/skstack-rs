@@ -18,7 +18,6 @@ pub struct TTYPort {
     timeout: Duration,
     exclusive: bool,
     port_name: Option<String>,
-    #[cfg(any(target_os = "ios", target_os = "macos"))]
     baud_rate: u32,
 }
 
