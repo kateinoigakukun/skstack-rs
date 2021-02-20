@@ -18,6 +18,7 @@ pub enum Error {
     Io(std::io::Error),
     TTY(tty::Error),
     Decode(String),
+    ParseInt(std::num::ParseIntError),
     UnexpectedEvent(SKEvent),
     ExpectOK(String),
 }
@@ -28,6 +29,7 @@ impl fmt::Display for Error {
             Error::Io(error) => <std::io::Error as fmt::Display>::fmt(error, fmt),
             Error::TTY(error) => <tty::Error as fmt::Display>::fmt(error, fmt),
             Error::Decode(string) => write!(fmt, "{}", string),
+            Error::ParseInt(error) => <std::num::ParseIntError as fmt::Display>::fmt(error, fmt),
             Error::UnexpectedEvent(error) => SKEvent::fmt(error, fmt),
             Error::ExpectOK(string) => write!(fmt, "{}", string),
         }
@@ -54,13 +56,31 @@ impl From<tty::Error> for Error {
     }
 }
 
+impl From<std::num::ParseIntError> for Error {
+    fn from(error: std::num::ParseIntError) -> Self {
+        Error::ParseInt(error)
+    }
+}
+
 pub struct SKSTACK {
     reader: std::io::BufReader<tty::TTYPort>,
 }
 
 #[derive(Debug)]
+pub struct SKPan {
+    channel: u8,
+    channel_page: u8,
+    pan_id: u16,
+    addr: String,
+    lqi: u8,
+    pair_id: String,
+}
+
+#[derive(Debug)]
 pub enum SKEvent {
     EVER(String),
+    EPANDESC(SKPan),
+    EVENT { code: u8, sender: String },
 }
 
 impl SKSTACK {
@@ -97,12 +117,40 @@ impl SKSTACK {
         Ok(())
     }
 
+    pub fn scan(&mut self, mode: u8, channel_mask: u32, duration: u8) -> Result<Vec<SKPan>> {
+        let mut found: Vec<SKPan> = vec![];
+        self.write_str(format!(
+            "SKSCAN {:X} {:X} {:X}\r\n",
+            mode, channel_mask, duration
+        ))?;
+        self.read_line_str()?;
+        self.consume_ok()?;
+        loop {
+            let event = self.read_event()?;
+            match event {
+                SKEvent::EVENT { code: 20, .. } => {
+                    match self.read_event()? {
+                        SKEvent::EPANDESC(pan) => {
+                            found.push(pan);
+                        }
+                        other => return Err(Error::UnexpectedEvent(other)),
+                    };
+                }
+                SKEvent::EVENT { code: 22, .. } => {
+                    break;
+                }
+                other => return Err(Error::UnexpectedEvent(other)),
+            }
+        }
+        Ok(found)
+    }
+
     fn write_str(&mut self, str: String) -> Result<usize> {
-        print!("{}", str);
         self.write(str.as_bytes())
     }
+
     fn write(&mut self, buf: &[u8]) -> Result<usize> {
-        info!("write: {}", {
+        info!("< {}", {
             if let Ok(str) = std::str::from_utf8(buf) {
                 str.to_string()
             } else {
@@ -126,6 +174,41 @@ impl SKSTACK {
         let str = self.read_line_str()?;
         if let Some(version) = str.strip_prefix("EVER ") {
             return Ok(SKEvent::EVER(version.to_string()));
+        } else if str.starts_with("EPANDESC") {
+            let mut read_field_value = || {
+                let line = self.read_line_str()?;
+                if let Some(rest) = line.strip_prefix("  ") {
+                    let mut components = rest.split(":");
+                    let _key = components
+                        .next()
+                        .ok_or(Error::Decode("missing key".to_string()))?;
+                    let value = components
+                        .next()
+                        .ok_or(Error::Decode("missing key".to_string()))?;
+                    Ok(value.to_string())
+                } else {
+                    Err(Error::Decode(line))
+                }
+            };
+            let channel = u8::from_str_radix(read_field_value()?.as_str(), 16)?;
+            let channel_page = u8::from_str_radix(read_field_value()?.as_str(), 16)?;
+            let pan_id = u16::from_str_radix(read_field_value()?.as_str(), 16)?;
+            let addr = read_field_value()?;
+            let lqi = u8::from_str_radix(read_field_value()?.as_str(), 16)?;
+            let pair_id = read_field_value()?;
+            return Ok(SKEvent::EPANDESC(SKPan {
+                channel,
+                channel_page,
+                pan_id,
+                addr,
+                lqi,
+                pair_id,
+            }));
+        } else if let Some(rest) = str.strip_prefix("EVENT ") {
+            let mut components = rest.split_whitespace();
+            let code: u8 = components.next().unwrap().parse()?;
+            let sender: String = components.next().unwrap().to_string();
+            return Ok(SKEvent::EVENT { code, sender });
         }
         return Err(Error::Decode(format!("failed decoding SKEvent: {}", str)));
     }
@@ -139,7 +222,7 @@ impl SKSTACK {
         let mut buf = vec![];
         read_until_crlf(&mut self.reader, &mut buf)?;
         let result: Vec<u8> = buf[..buf.len() - 2].into();
-        info!("read: {}", {
+        info!("> {}", {
             if let Ok(str) = std::str::from_utf8(&result) {
                 str.to_string()
             } else {

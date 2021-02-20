@@ -1,7 +1,5 @@
-
-
 use anyhow::Result;
-use skstack_rs::SKSTACK;
+use skstack_rs::{SKPan, SKSTACK};
 mod config;
 
 fn main() -> Result<()> {
@@ -11,5 +9,20 @@ fn main() -> Result<()> {
     println!("version: {}", version);
     skstack.set_password(config::routeb_password)?;
     skstack.set_rbid(config::routeb_id)?;
+
+    let mut duration = 6;
+    let mut found: Vec<SKPan> = vec![];
+    loop {
+        println!("scanning (duration = {})", duration);
+        found = skstack.scan(2, 0xFFFFFFFF, duration)?;
+        if !found.is_empty() {
+            break;
+        }
+        duration += 1;
+        if duration > 15 {
+            panic!("duration too long: {}", duration);
+        }
+    }
+    println!("{:?}", found);
     Ok(())
 }
