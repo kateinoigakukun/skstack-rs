@@ -13,7 +13,6 @@ type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug)]
 pub enum Error {
-    Serial(serialport::Error),
     StrDecode(std::str::Utf8Error),
     Io(std::io::Error),
     TTY(tty::Error),
@@ -24,7 +23,6 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> std::result::Result<(), fmt::Error> {
         match self {
-            Error::Serial(error) => <serialport::Error as fmt::Display>::fmt(error, fmt),
             Error::StrDecode(error) => <std::str::Utf8Error as fmt::Display>::fmt(error, fmt),
             Error::Io(error) => <std::io::Error as fmt::Display>::fmt(error, fmt),
             Error::TTY(error) => <tty::Error as fmt::Display>::fmt(error, fmt),
@@ -36,12 +34,6 @@ impl fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
-
-impl From<serialport::Error> for Error {
-    fn from(error: serialport::Error) -> Self {
-        Error::Serial(error)
-    }
-}
 
 impl From<std::io::Error> for Error {
     fn from(error: std::io::Error) -> Self {
