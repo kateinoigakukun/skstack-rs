@@ -68,12 +68,12 @@ pub struct SKSTACK {
 
 #[derive(Debug)]
 pub struct SKPan {
-    channel: u8,
-    channel_page: u8,
-    pan_id: u16,
-    addr: String,
-    lqi: u8,
-    pair_id: String,
+    pub channel: u8,
+    pub channel_page: u8,
+    pub pan_id: u16,
+    pub addr: String,
+    pub lqi: u8,
+    pub pair_id: String,
 }
 
 #[derive(Debug)]
@@ -81,11 +81,12 @@ pub enum SKEvent {
     EVER(String),
     EPANDESC(SKPan),
     EVENT { code: u8, sender: String },
+    Unknown(String),
 }
 
 impl SKSTACK {
     pub fn open(path: String) -> Result<Self> {
-        let port = TTYPort::open(path, 115_200, std::time::Duration::from_millis(1000))?;
+        let port = TTYPort::open(path, 115_200)?;
         let reader = std::io::BufReader::new(port);
         Ok(SKSTACK { reader })
     }
@@ -103,7 +104,7 @@ impl SKSTACK {
 
     pub fn set_password<S: Into<String>>(&mut self, password: S) -> Result<()> {
         let password: String = password.into();
-        self.write_str(format!("SKSETPWD {} {}\r\n", password.len(), password))?;
+        self.write_str(format!("SKSETPWD {:X} {}\r\n", password.len(), password))?;
         self.read_line_str()?;
         self.consume_ok()?;
         Ok(())
@@ -143,6 +144,39 @@ impl SKSTACK {
             }
         }
         Ok(found)
+    }
+
+    pub fn set_register(&mut self, reg: &str, value: String) -> Result<()> {
+        self.write_str(format!("SKSREG {} {}\r\n", reg, value))?;
+        self.read_line_str()?;
+        self.consume_ok()?;
+        Ok(())
+    }
+
+    pub fn get_link_local_addr(&mut self, addr: String) -> Result<String> {
+        self.write_str(format!("SKLL64 {}\r\n", addr))?;
+        self.read_line_str()?;
+        let addr = self.read_line_str()?;
+        Ok(addr)
+    }
+
+    pub fn join(&mut self, ip_v6_addr: String) -> Result<()> {
+        self.write_str(format!("SKJOIN {}\r\n", ip_v6_addr))?;
+        self.read_line_str()?;
+        self.consume_ok()?;
+        loop {
+            let event = self.read_event()?;
+            match event {
+                SKEvent::EVENT { code: 25, .. } => {
+                    break;
+                }
+                SKEvent::EVENT { code: 24, .. } => {
+                    return Err(Error::UnexpectedEvent(event))
+                }
+                _ => continue,
+            }
+        }
+        Ok(())
     }
 
     fn write_str(&mut self, str: String) -> Result<usize> {
@@ -210,7 +244,7 @@ impl SKSTACK {
             let sender: String = components.next().unwrap().to_string();
             return Ok(SKEvent::EVENT { code, sender });
         }
-        return Err(Error::Decode(format!("failed decoding SKEvent: {}", str)));
+        return Ok(SKEvent::Unknown(str));
     }
 
     fn read_line_str(&mut self) -> Result<String> {

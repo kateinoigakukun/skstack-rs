@@ -4,7 +4,7 @@ use std::path::Path;
 use std::time::Duration;
 use std::{fmt, io};
 
-use libc::cfsetspeed;
+use libc::{ONLCR, OPOST, cfsetspeed};
 use nix::fcntl::OFlag;
 use nix::{self, libc, unistd};
 
@@ -15,7 +15,6 @@ fn close(fd: RawFd) {
 #[derive(Debug)]
 pub struct TTYPort {
     fd: RawFd,
-    timeout: Duration,
     exclusive: bool,
     port_name: Option<String>,
     baud_rate: u32,
@@ -55,7 +54,7 @@ impl From<Error> for io::Error {
 }
 
 impl TTYPort {
-    pub fn open(path_str: String, baud_rate: u32, timeout: Duration) -> Result<TTYPort, Error> {
+    pub fn open(path_str: String, baud_rate: u32) -> Result<TTYPort, Error> {
         use nix::libc::{tcgetattr, tcsetattr};
 
         let path = Path::new(&path_str);
@@ -74,9 +73,17 @@ impl TTYPort {
         let mut termios = unsafe { termios.assume_init() };
 
         {
-            termios.c_cflag = libc::CS8 | libc::CREAD | libc::CLOCAL;
-            termios.c_lflag &= !libc::ECHO;
-            termios.c_cc[libc::VTIME] = timeout.as_millis() as u8;
+            termios.c_cflag = libc::CS8 | libc::CREAD | libc::CLOCAL | libc::HUPCL;
+            termios.c_lflag &= !(libc::ICANON
+                | libc::ECHO
+                | libc::ECHOE
+                | libc::ECHOK
+                | libc::ECHONL
+                | libc::ISIG
+                | libc::IEXTEN);
+            termios.c_oflag &= !(libc::OPOST | libc::ONLCR | libc::OCRNL);
+            termios.c_iflag &= !(libc::INLCR | libc::IGNCR | libc::ICRNL | libc::IGNBRK);
+            termios.c_cc[libc::VTIME] = 0;
             unsafe { cfsetspeed(&mut termios, baud_rate as u64) };
             unsafe { tcsetattr(fd, libc::TCSANOW, &termios) };
             unsafe { libc::tcflush(fd, libc::TCIOFLUSH) };
@@ -92,7 +99,6 @@ impl TTYPort {
         // Return the final port object
         Ok(TTYPort {
             fd,
-            timeout: timeout,
             exclusive: false,
             port_name: Some(path_str.clone()),
             #[cfg(any(target_os = "ios", target_os = "macos"))]
