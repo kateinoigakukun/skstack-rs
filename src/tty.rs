@@ -4,7 +4,7 @@ use std::path::Path;
 
 use std::{fmt, io};
 
-use libc::{cfsetspeed};
+use libc::cfsetspeed;
 use nix::fcntl::OFlag;
 use nix::{self, libc, unistd};
 

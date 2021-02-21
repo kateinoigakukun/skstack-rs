@@ -207,7 +207,7 @@ impl SKSTACK {
             unsafe { std::str::from_utf8_unchecked(bytes) },
         ))?;
         self.read_line_str()?;
-        
+
         Ok(())
     }
 
