@@ -1,9 +1,10 @@
 use std::time::Duration;
 
 use anyhow::Result;
+use echonet_lite::EFrame;
 use log::{debug, error, warn};
 use nix::unistd::sleep;
-use rand::Rng;
+use rand::{prelude::ThreadRng, Rng};
 use skstack_rs::echonet_lite;
 use skstack_rs::skstack::{SKEvent, SKPan, SKSTACK};
 
@@ -49,29 +50,24 @@ fn main() -> Result<()> {
 
     skstack.set_timeout(Some(Duration::from_millis(10000)));
     let mut rng = rand::thread_rng();
-    'main_loop: loop {
+
+    loop {
+        let frame =
+            send_echonet_request(get_current_power_frame, &ip_v6_addr, &mut skstack, &mut rng)?;
+        handle_current_power(frame);
+        sleep(1);
+    }
+}
+
+fn send_echonet_request(
+    frame_fn: fn(echonet_lite::TID) -> echonet_lite::EFrame,
+    ip_v6_addr: &str,
+    skstack: &mut SKSTACK,
+    rng: &mut ThreadRng,
+) -> anyhow::Result<echonet_lite::EFrame> {
+    'request_loop: loop {
         let tid = rng.gen();
-        let frame = echonet_lite::EFrame {
-            ehd1: echonet_lite::ECHONET_LITE_HEADER1,
-            ehd2: echonet_lite::EHD2::Format1,
-            tid: tid,
-            edata: echonet_lite::EDATA::Format1 {
-                seoj: echonet_lite::EOJ {
-                    x1: 0x05,
-                    x2: 0xff,
-                    x3: 0x01,
-                },
-                deoj: TARGET_EOJ,
-                esv: echonet_lite::ESV::Get,
-                opc: 1,
-                props: vec![echonet_lite::EProp {
-                    /// 瞬時電力計測値
-                    epc: 0xE7,
-                    pdc: 0,
-                    edt: vec![],
-                }],
-            },
-        };
+        let frame = frame_fn(tid);
         skstack.send_udp(1, 3610, &ip_v6_addr, &frame.as_bytes())?;
 
         loop {
@@ -80,7 +76,7 @@ fn main() -> Result<()> {
                 Err(error) => {
                     if error.is_timeout() {
                         warn!("timedout: {:?}", error);
-                        continue 'main_loop;
+                        continue 'request_loop;
                     }
                     error!("{:?}", error);
                     return Err(error.into());
@@ -93,24 +89,92 @@ fn main() -> Result<()> {
                     if frame.tid != tid {
                         continue;
                     }
-                    let value = match frame.edata {
-                        echonet_lite::EDATA::Format1 { props, .. } => {
-                            let prop = props.first().unwrap();
-                            assert_eq!(prop.edt.len(), 4);
-                            let mut bytes: [u8; 4] = Default::default();
-                            bytes.copy_from_slice(&prop.edt);
-                            i32::from_be_bytes(bytes)
-                        }
-                        echonet_lite::EDATA::Format2 { .. } => {
-                            panic!("unexpected format2 response!")
-                        }
-                    };
-                    println!("⚡ {}w", value);
-                    sleep(1);
-                    break;
+                    return Ok(frame);
                 }
                 _ => {}
             }
         }
+    }
+}
+
+fn handle_current_power(frame: echonet_lite::EFrame) {
+    let value = match frame.edata {
+        echonet_lite::EDATA::Format1 { props, .. } => {
+            let prop = props.first().unwrap();
+            assert_eq!(prop.edt.len(), 4);
+            let mut bytes: [u8; 4] = Default::default();
+            bytes.copy_from_slice(&prop.edt);
+            i32::from_be_bytes(bytes)
+        }
+        echonet_lite::EDATA::Format2 { .. } => {
+            panic!("unexpected format2 response!")
+        }
+    };
+    println!("⚡ {}w", value);
+}
+
+const SELF_EOJ: echonet_lite::EOJ = echonet_lite::EOJ {
+    x1: 0x05,
+    x2: 0xff,
+    x3: 0x01,
+};
+
+fn get_current_power_frame(tid: echonet_lite::TID) -> echonet_lite::EFrame {
+    echonet_lite::EFrame {
+        ehd1: echonet_lite::ECHONET_LITE_HEADER1,
+        ehd2: echonet_lite::EHD2::Format1,
+        tid: tid,
+        edata: echonet_lite::EDATA::Format1 {
+            seoj: SELF_EOJ,
+            deoj: TARGET_EOJ,
+            esv: echonet_lite::ESV::Get,
+            opc: 1,
+            props: vec![echonet_lite::EProp {
+                /// 瞬時電力計測値
+                epc: 0xE7,
+                pdc: 0,
+                edt: vec![],
+            }],
+        },
+    }
+}
+
+fn get_integral_power_unit_frame(tid: echonet_lite::TID) -> echonet_lite::EFrame {
+    echonet_lite::EFrame {
+        ehd1: echonet_lite::ECHONET_LITE_HEADER1,
+        ehd2: echonet_lite::EHD2::Format1,
+        tid: tid,
+        edata: echonet_lite::EDATA::Format1 {
+            seoj: SELF_EOJ,
+            deoj: TARGET_EOJ,
+            esv: echonet_lite::ESV::Get,
+            opc: 1,
+            props: vec![echonet_lite::EProp {
+                /// 積算電力量単位（正方向、逆方向計測値）
+                epc: 0xE1,
+                pdc: 0,
+                edt: vec![],
+            }],
+        },
+    }
+}
+
+fn get_integral_power_frame(tid: echonet_lite::TID) -> echonet_lite::EFrame {
+    echonet_lite::EFrame {
+        ehd1: echonet_lite::ECHONET_LITE_HEADER1,
+        ehd2: echonet_lite::EHD2::Format1,
+        tid: tid,
+        edata: echonet_lite::EDATA::Format1 {
+            seoj: SELF_EOJ,
+            deoj: TARGET_EOJ,
+            esv: echonet_lite::ESV::Get,
+            opc: 1,
+            props: vec![echonet_lite::EProp {
+                /// 積算電力量計測値履歴１(正方向計測値)
+                epc: 0xE2,
+                pdc: 0,
+                edt: vec![],
+            }],
+        },
     }
 }
