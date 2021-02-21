@@ -1,10 +1,10 @@
 use std::mem::MaybeUninit;
 use std::os::unix::prelude::*;
 use std::path::Path;
-use std::time::Duration;
+
 use std::{fmt, io};
 
-use libc::{ONLCR, OPOST, cfsetspeed};
+use libc::{cfsetspeed};
 use nix::fcntl::OFlag;
 use nix::{self, libc, unistd};
 
