@@ -2,16 +2,27 @@ use anyhow::Result;
 use log::debug;
 use rand::Rng;
 use skstack_rs::skstack::{SKEvent, SKPan, SKSTACK};
-mod config;
-mod echonet_lite;
+use skstack_rs::echonet_lite;
+
+const TARGET_EOJ: echonet_lite::EOJ = echonet_lite::EOJ {
+    /// 住宅・設備関連機器クラスグループ
+    x1: 0x02,
+    /// 低圧スマート電力量メータ
+    x2: 0x88,
+    x3: 0x01,
+};
 
 fn main() -> Result<()> {
     env_logger::init();
-    let mut skstack = crate::SKSTACK::open(config::DEVICE_PATH.to_string())?;
+    let device_path = std::env::var("DEVICE_PATH")?;
+    let routeb_password = std::env::var("ROUTEB_PASSWORD")?;
+    let routeb_id = std::env::var("ROUTEB_ID")?;
+
+    let mut skstack = crate::SKSTACK::open(device_path)?;
     let version = skstack.version()?;
     println!("version: {}", version);
-    skstack.set_password(config::ROUTEB_PASSWORD)?;
-    skstack.set_rbid(config::ROUTEB_ID)?;
+    skstack.set_password(routeb_password)?;
+    skstack.set_rbid(routeb_id)?;
 
     let mut duration = 4;
     let mut found: Vec<SKPan>;
@@ -46,7 +57,7 @@ fn main() -> Result<()> {
                     x2: 0xff,
                     x3: 0x01,
                 },
-                deoj: config::TARGET_EOJ,
+                deoj: TARGET_EOJ,
                 esv: echonet_lite::ESV::Get,
                 opc: 1,
                 props: vec![echonet_lite::EProp {

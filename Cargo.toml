@@ -12,3 +12,12 @@ nix = "0.19.1"
 log = "0.4"
 rand = "0.8.3"
 env_logger = "0.8.3"
+
+[dev-dependencies]
+anyhow = "1.0.38"
+rand = "0.8.3"
+env_logger = "0.8.3"
+
+[[example]]
+name = "get-power"
+path = "examples/get-power.rs"
