@@ -3,11 +3,12 @@ use fmt::Debug;
 use log::info;
 use memchr;
 
+use crate::tty::{self, TTYPort};
 use std::{
     io::{BufRead, Write},
+    time::Duration,
     usize,
 };
-use crate::tty::{self, TTYPort};
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -15,18 +16,25 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub enum Error {
     StrDecode(std::str::Utf8Error),
     Io(std::io::Error),
-    TTY(tty::Error),
     Decode(String),
     ParseInt(std::num::ParseIntError),
     UnexpectedEvent(SKEvent),
     ExpectOK(String),
 }
+impl Error {
+    pub fn is_timeout(&self) -> bool {
+        match self {
+            Error::Io(error) => error.kind() == std::io::ErrorKind::TimedOut,
+            _ => false,
+        }
+    }
+}
+
 impl fmt::Display for Error {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> std::result::Result<(), fmt::Error> {
         match self {
             Error::StrDecode(error) => <std::str::Utf8Error as fmt::Display>::fmt(error, fmt),
             Error::Io(error) => <std::io::Error as fmt::Display>::fmt(error, fmt),
-            Error::TTY(error) => <tty::Error as fmt::Display>::fmt(error, fmt),
             Error::Decode(string) => write!(fmt, "{}", string),
             Error::ParseInt(error) => <std::num::ParseIntError as fmt::Display>::fmt(error, fmt),
             Error::UnexpectedEvent(error) => write!(fmt, "unexpected event: {:?}", error),
@@ -43,15 +51,15 @@ impl From<std::io::Error> for Error {
     }
 }
 
-impl From<std::str::Utf8Error> for Error {
-    fn from(error: std::str::Utf8Error) -> Self {
-        Error::StrDecode(error)
+impl From<tty::Error> for Error {
+    fn from(error: tty::Error) -> Self {
+        Error::Io(error.into())
     }
 }
 
-impl From<tty::Error> for Error {
-    fn from(error: tty::Error) -> Self {
-        Error::TTY(error)
+impl From<std::str::Utf8Error> for Error {
+    fn from(error: std::str::Utf8Error) -> Self {
+        Error::StrDecode(error)
     }
 }
 
@@ -97,8 +105,8 @@ pub enum SKEvent {
 }
 
 impl SKSTACK {
-    pub fn open(path: String) -> Result<Self> {
-        let port = TTYPort::open(path, 115_200)?;
+    pub fn open(path: String, timeout: Option<Duration>) -> Result<Self> {
+        let port = TTYPort::open(path, 115_200, timeout)?;
         let reader = std::io::BufReader::new(port);
         Ok(SKSTACK { reader })
     }
@@ -158,6 +166,9 @@ impl SKSTACK {
         Ok(found)
     }
 
+    pub fn set_timeout(&mut self, timeout: Option<Duration>) {
+        self.reader.get_mut().set_timeout(timeout);
+    }
     pub fn set_register(&mut self, reg: &str, value: String) -> Result<()> {
         self.write_str(format!("SKSREG {} {}\r\n", reg, value))?;
         self.read_line_str()?;
@@ -290,60 +301,7 @@ impl SKSTACK {
                 .to_string();
             return Ok(SKEvent::EVENT { code, sender });
         } else if let Some(rest) = str.strip_prefix("ERXUDP ") {
-            let mut components = rest.split_whitespace();
-            let sender = components
-                .next()
-                .ok_or(Error::Decode(
-                    format!("failed to get sender: {:}", rest).to_string(),
-                ))?
-                .to_string();
-            let dest = components
-                .next()
-                .ok_or(Error::Decode(
-                    format!("failed to get dest: {:}", rest).to_string(),
-                ))?
-                .to_string();
-            let rport = u16::from_str_radix(
-                components.next().ok_or(Error::Decode(
-                    format!("failed to get rport: {:}", rest).to_string(),
-                ))?,
-                16,
-            )?;
-            let lport = u16::from_str_radix(
-                components.next().ok_or(Error::Decode(
-                    format!("failed to get lport: {:}", rest).to_string(),
-                ))?,
-                16,
-            )?;
-            let sender_lla = components
-                .next()
-                .ok_or(Error::Decode(
-                    format!("failed to get sender_lla: {:}", rest).to_string(),
-                ))?
-                .to_string();
-            let secured = u8::from_str_radix(
-                components.next().ok_or(Error::Decode(
-                    format!("failed to get secured: {:}", rest).to_string(),
-                ))?,
-                16,
-            )?;
-            let datalen = u16::from_str_radix(
-                components.next().ok_or(Error::Decode(
-                    format!("failed to get datalen: {:}", rest).to_string(),
-                ))?,
-                16,
-            )?;
-            let data = decode_hex(components.collect::<Vec<&str>>().join(" "))?;
-            return Ok(SKEvent::ERXUDP {
-                sender,
-                dest,
-                rport,
-                lport,
-                sender_lla,
-                secured,
-                datalen,
-                data: data,
-            });
+            return parse_erxudp(rest);
         }
         return Ok(SKEvent::Unknown(str));
     }
@@ -412,9 +370,66 @@ fn decode_hex(s: String) -> std::result::Result<Vec<u8>, std::num::ParseIntError
         .collect()
 }
 
+fn parse_erxudp(rest: &str) -> Result<SKEvent> {
+    let mut components = rest.split_whitespace();
+    let sender = components
+        .next()
+        .ok_or(Error::Decode(
+            format!("failed to get sender: {:}", rest).to_string(),
+        ))?
+        .to_string();
+    let dest = components
+        .next()
+        .ok_or(Error::Decode(
+            format!("failed to get dest: {:}", rest).to_string(),
+        ))?
+        .to_string();
+    let rport = u16::from_str_radix(
+        components.next().ok_or(Error::Decode(
+            format!("failed to get rport: {:}", rest).to_string(),
+        ))?,
+        16,
+    )?;
+    let lport = u16::from_str_radix(
+        components.next().ok_or(Error::Decode(
+            format!("failed to get lport: {:}", rest).to_string(),
+        ))?,
+        16,
+    )?;
+    let sender_lla = components
+        .next()
+        .ok_or(Error::Decode(
+            format!("failed to get sender_lla: {:}", rest).to_string(),
+        ))?
+        .to_string();
+    let secured = u8::from_str_radix(
+        components.next().ok_or(Error::Decode(
+            format!("failed to get secured: {:}", rest).to_string(),
+        ))?,
+        16,
+    )?;
+    let datalen = u16::from_str_radix(
+        components.next().ok_or(Error::Decode(
+            format!("failed to get datalen: {:}", rest).to_string(),
+        ))?,
+        16,
+    )?;
+    let data = decode_hex(components.collect::<Vec<&str>>().join(" "))?;
+    return Ok(SKEvent::ERXUDP {
+        sender,
+        dest,
+        rport,
+        lport,
+        sender_lla,
+        secured,
+        datalen,
+        data: data,
+    });
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{read_until_crlf, Result};
+    use super::{parse_erxudp, read_until_crlf, Result};
 
     #[test]
     fn test_read_line_zero() -> Result<()> {
@@ -433,6 +448,12 @@ mod tests {
         let mut buf = vec![];
         read_until_crlf(&mut cursor, &mut buf)?;
         assert_eq!(buf, "line_content\r\n".as_bytes());
+        Ok(())
+    }
+    #[test]
+    fn test_parse_erxudp() -> Result<()> {
+        let rest = "FE80:0000:0000:0000:0280:8700:3015:29FC FE80:0000:0000:0000:1207:23FF:FEA0:75B3 0E1A 0E1A 00808700301529FC 1 0012 1081412202880105FF017201E704000001C0";
+        parse_erxudp(rest)?;
         Ok(())
     }
 }

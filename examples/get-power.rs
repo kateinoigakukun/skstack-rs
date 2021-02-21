@@ -1,9 +1,11 @@
+use std::time::Duration;
+
 use anyhow::Result;
-use log::debug;
+use log::{debug, error, warn};
 use nix::unistd::sleep;
 use rand::Rng;
-use skstack_rs::skstack::{SKEvent, SKPan, SKSTACK};
 use skstack_rs::echonet_lite;
+use skstack_rs::skstack::{SKEvent, SKPan, SKSTACK};
 
 const TARGET_EOJ: echonet_lite::EOJ = echonet_lite::EOJ {
     /// 住宅・設備関連機器クラスグループ
@@ -19,7 +21,7 @@ fn main() -> Result<()> {
     let routeb_password = std::env::var("ROUTEB_PASSWORD")?;
     let routeb_id = std::env::var("ROUTEB_ID")?;
 
-    let mut skstack = crate::SKSTACK::open(device_path)?;
+    let mut skstack = crate::SKSTACK::open(device_path, None)?;
     let version = skstack.version()?;
     println!("version: {}", version);
     skstack.set_password(routeb_password)?;
@@ -45,8 +47,9 @@ fn main() -> Result<()> {
     let ip_v6_addr = skstack.get_link_local_addr(found.addr.clone())?;
     skstack.join(&ip_v6_addr)?;
 
+    skstack.set_timeout(Some(Duration::from_millis(10000)));
     let mut rng = rand::thread_rng();
-    loop {
+    'main_loop: loop {
         let tid = rng.gen();
         let frame = echonet_lite::EFrame {
             ehd1: echonet_lite::ECHONET_LITE_HEADER1,
@@ -72,12 +75,24 @@ fn main() -> Result<()> {
         skstack.send_udp(1, 3610, &ip_v6_addr, &frame.as_bytes())?;
 
         loop {
-            let event = skstack.read_event()?;
+            let event = match skstack.read_event() {
+                Ok(event) => event,
+                Err(error) => {
+                    if error.is_timeout() {
+                        warn!("timedout: {:?}", error);
+                        continue 'main_loop;
+                    }
+                    error!("{:?}", error);
+                    return Err(error.into());
+                }
+            };
             match event {
                 SKEvent::ERXUDP { data, .. } => {
-                    let frame = echonet_lite::EFrame::from_bytes(&data)?;
+                    let frame = echonet_lite::EFrame::from_bytes(&data).expect("read frame");
                     debug!("{:?}", frame);
-                    if frame.tid != tid { continue; }
+                    if frame.tid != tid {
+                        continue;
+                    }
                     let value = match frame.edata {
                         echonet_lite::EDATA::Format1 { props, .. } => {
                             let prop = props.first().unwrap();
@@ -86,9 +101,11 @@ fn main() -> Result<()> {
                             bytes.copy_from_slice(&prop.edt);
                             i32::from_be_bytes(bytes)
                         }
-                        echonet_lite::EDATA::Format2 { .. } => panic!("unexpected format2 response!"),
+                        echonet_lite::EDATA::Format2 { .. } => {
+                            panic!("unexpected format2 response!")
+                        }
                     };
-                    println!("instantaneous electric power: {}", value);
+                    println!("⚡ {}w", value);
                     sleep(1);
                     break;
                 }
