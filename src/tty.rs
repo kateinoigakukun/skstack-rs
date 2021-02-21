@@ -4,7 +4,7 @@ use std::path::Path;
 
 use std::{fmt, io};
 
-use libc::cfsetspeed;
+use libc::{cfsetspeed, speed_t};
 use nix::fcntl::OFlag;
 use nix::{self, libc, unistd};
 
@@ -84,7 +84,7 @@ impl TTYPort {
             termios.c_oflag &= !(libc::OPOST | libc::ONLCR | libc::OCRNL);
             termios.c_iflag &= !(libc::INLCR | libc::IGNCR | libc::ICRNL | libc::IGNBRK);
             termios.c_cc[libc::VTIME] = 0;
-            unsafe { cfsetspeed(&mut termios, baud_rate as u64) };
+            unsafe { cfsetspeed(&mut termios, baud_rate as speed_t) };
             unsafe { tcsetattr(fd, libc::TCSANOW, &termios) };
             unsafe { libc::tcflush(fd, libc::TCIOFLUSH) };
             nix::fcntl::fcntl(fd, nix::fcntl::F_SETFL(nix::fcntl::OFlag::empty()))?;
