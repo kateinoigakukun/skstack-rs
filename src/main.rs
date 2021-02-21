@@ -1,7 +1,7 @@
 use anyhow::Result;
 use log::debug;
 use rand::Rng;
-use skstack_rs::{SKEvent, SKPan, SKSTACK};
+use skstack_rs::skstack::{SKEvent, SKPan, SKSTACK};
 mod config;
 mod echonet_lite;
 
