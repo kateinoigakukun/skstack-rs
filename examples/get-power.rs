@@ -1,5 +1,6 @@
 use anyhow::Result;
 use log::debug;
+use nix::unistd::sleep;
 use rand::Rng;
 use skstack_rs::skstack::{SKEvent, SKPan, SKSTACK};
 use skstack_rs::echonet_lite;
@@ -61,6 +62,7 @@ fn main() -> Result<()> {
                 esv: echonet_lite::ESV::Get,
                 opc: 1,
                 props: vec![echonet_lite::EProp {
+                    /// 瞬時電力計測値
                     epc: 0xE7,
                     pdc: 0,
                     edt: vec![],
@@ -74,8 +76,21 @@ fn main() -> Result<()> {
             match event {
                 SKEvent::ERXUDP { data, .. } => {
                     let frame = echonet_lite::EFrame::from_bytes(&data)?;
-                    println!("{:?}", frame);
-                    if frame.tid == tid { break; }
+                    debug!("{:?}", frame);
+                    if frame.tid != tid { continue; }
+                    let value = match frame.edata {
+                        echonet_lite::EDATA::Format1 { props, .. } => {
+                            let prop = props.first().unwrap();
+                            assert_eq!(prop.edt.len(), 4);
+                            let mut bytes: [u8; 4] = Default::default();
+                            bytes.copy_from_slice(&prop.edt);
+                            i32::from_be_bytes(bytes)
+                        }
+                        echonet_lite::EDATA::Format2 { .. } => panic!("unexpected format2 response!"),
+                    };
+                    println!("instantaneous electric power: {}", value);
+                    sleep(1);
+                    break;
                 }
                 _ => {}
             }
