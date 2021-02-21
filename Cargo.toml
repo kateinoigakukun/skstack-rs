@@ -10,4 +10,5 @@ memchr = { version = "2", default-features = false }
 num_enum = "0.5.1"
 nix = "0.19.1"
 log = "0.4"
+rand = "0.8.3"
 env_logger = "0.8.3"

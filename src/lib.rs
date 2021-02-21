@@ -173,7 +173,7 @@ impl SKSTACK {
         Ok(addr)
     }
 
-    pub fn join(&mut self, ip_v6_addr: String) -> Result<()> {
+    pub fn join(&mut self, ip_v6_addr: &str) -> Result<()> {
         self.write_str(format!("SKJOIN {}\r\n", ip_v6_addr))?;
         self.read_line_str()?;
         self.consume_ok()?;
@@ -194,7 +194,7 @@ impl SKSTACK {
         &mut self,
         handle: u8,
         port: u16,
-        ip_v6_addr: String,
+        ip_v6_addr: &str,
         bytes: &[u8],
     ) -> Result<()> {
         // TODO: Support SEC field
@@ -357,6 +357,11 @@ impl SKSTACK {
     fn read_line(&mut self) -> Result<Vec<u8>> {
         let mut buf = vec![];
         read_until_crlf(&mut self.reader, &mut buf)?;
+        if buf.len() < 2 {
+            return Err(Error::Decode(
+                format!("too short line: {:?}", buf).to_string(),
+            ));
+        }
         let result: Vec<u8> = buf[..buf.len() - 2].into();
         info!("> {}", {
             if let Ok(str) = std::str::from_utf8(&result) {
