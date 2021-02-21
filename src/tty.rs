@@ -101,7 +101,6 @@ impl TTYPort {
             fd,
             exclusive: false,
             port_name: Some(path_str.clone()),
-            #[cfg(any(target_os = "ios", target_os = "macos"))]
             baud_rate: baud_rate,
         })
     }
